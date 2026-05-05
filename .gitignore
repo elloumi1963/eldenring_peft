@@ -1,0 +1,137 @@
+# =========================
+
+# Python cache / compiled
+
+# =========================
+
+**pycache**/
+*.py[cod]
+*.so
+*.pyd
+
+# =========================
+
+# Virtual environments
+
+# =========================
+
+.venv/
+venv/
+env/
+sd_env/
+eval_env/
+.conda/
+conda-meta/
+
+# =========================
+
+# Jupyter
+
+# =========================
+
+.ipynb_checkpoints/
+
+# =========================
+
+# OS / editor junk
+
+# =========================
+
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# =========================
+
+# Logs
+
+# =========================
+
+logs/
+*.out
+*.err
+slurm-*.out
+
+# =========================
+
+# HuggingFace / model cache
+
+# =========================
+
+.cache/
+hf_cache/
+huggingface/
+**/.cache/
+**/hf_cache/
+
+# =========================
+
+# Trained model weights (too large)
+
+# =========================
+
+elden_ring_lora_weights/
+elden_ring_dora_weights/
+elden_ring_adalora_weights/
+outputs/
+checkpoints/
+models/
+
+# =========================
+
+# Generated evaluation images/results
+
+# =========================
+
+eval_*_samples/
+samples/
+*.png
+*.jpg
+*.jpeg
+
+# keep json metric summaries if you want:
+
+# !eval/*.json
+
+# =========================
+
+# Dataset raw images (too large)
+
+# =========================
+
+combined_data/
+data/images/
+raw_data/
+
+# =========================
+
+# Temporary files
+
+# =========================
+
+*.tmp
+*.temp
+*.log
+
+# =========================
+
+# Secrets
+
+# =========================
+
+.env
+.env.*
+*.token
+*.key
+*.pem
+
+# =========================
+
+# Misc
+
+# =========================
+
+pace-quota.txt
