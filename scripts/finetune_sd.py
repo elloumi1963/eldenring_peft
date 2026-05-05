@@ -328,6 +328,8 @@ def train_one_epoch(
     grad_acc_steps,
     global_step,
     training_method="lora",
+    epoch=None,
+    **kwargs,
 ):
     unet.train()
     total_loss = 0.0
