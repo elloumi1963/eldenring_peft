@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
 from peft import AdaLoraConfig, LoraConfig, get_peft_model
@@ -17,6 +18,10 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer, get_cosine_schedule_with_warmup
 
 from eldenring_peft.dataset import EldenRingDataset
+
+
+if not hasattr(torch, "float8_e8m0fnu"):
+    torch.float8_e8m0fnu = torch.float32
 
 
 DEFAULT_TARGET_MODULES = [
@@ -33,30 +38,99 @@ def parse_target_modules(value: str) -> List[str]:
     return [x.strip() for x in value.split(",") if x.strip()]
 
 
+class DCFTLinear(nn.Module):
+    def __init__(self, linear_layer: nn.Linear, r=16, kernel_size=4, stride=2, dropout=0.1):
+        super().__init__()
+
+        self.in_features = linear_layer.in_features
+        self.out_features = linear_layer.out_features
+
+        self.weight = linear_layer.weight
+        self.bias = linear_layer.bias
+        self.weight.requires_grad = False
+        if self.bias is not None:
+            self.bias.requires_grad = False
+
+        self.r = r
+        self.compressed_dim = max(1, r // stride)
+
+        self.down_proj = nn.Linear(self.in_features, self.compressed_dim, bias=False)
+        self.dropout = nn.Dropout(p=dropout)
+
+        self.deconv = nn.ConvTranspose1d(
+            in_channels=1,
+            out_channels=1,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=kernel_size // 2,
+        )
+
+        deconv_out_len = (self.compressed_dim - 1) * stride - 2 * (kernel_size // 2) + kernel_size
+        self.up_proj = nn.Linear(deconv_out_len, self.out_features, bias=False)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
+        nn.init.zeros_(self.up_proj.weight)
+        nn.init.normal_(self.deconv.weight, std=0.02)
+
+    def forward(self, x):
+        base_out = F.linear(x, self.weight, self.bias)
+
+        orig_shape = x.shape
+        x_flat = x.reshape(-1, self.in_features)
+
+        subspace_x = self.down_proj(x_flat)
+        subspace_x = self.dropout(subspace_x)
+
+        subspace_x = subspace_x.unsqueeze(1)
+        deconv_x = self.deconv(subspace_x).squeeze(1)
+
+        dcft_out = self.up_proj(deconv_x)
+        dcft_out = dcft_out.reshape(*orig_shape[:-1], self.out_features)
+
+        return base_out + dcft_out
+
+
+def inject_dcft(module, target_modules, r=16, kernel_size=4, stride=2, dropout=0.1):
+    for name, child in module.named_children():
+        if isinstance(child, nn.Linear) and any(t in name for t in target_modules):
+            setattr(
+                module,
+                name,
+                DCFTLinear(
+                    child,
+                    r=r,
+                    kernel_size=kernel_size,
+                    stride=stride,
+                    dropout=dropout,
+                ),
+            )
+        else:
+            inject_dcft(child, target_modules, r, kernel_size, stride, dropout)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Fine-tune Stable Diffusion v1.5 with LoRA, DoRA, AdaLoRA, or full UNet fine-tuning."
+        description="Fine-tune Stable Diffusion v1.5 with LoRA, DoRA, AdaLoRA, DCFT, or full UNet fine-tuning."
     )
 
-    # Method
     parser.add_argument(
         "--method",
         type=str,
         default="lora",
-        choices=["lora", "dora", "adalora", "full"],
-        help="Fine-tuning method: lora, dora, adalora, or full.",
+        choices=["lora", "dora", "adalora", "dcft", "full"],
+        help="Fine-tuning method.",
     )
 
-    # Data
     parser.add_argument("--data_dir", type=str, default="combined_data")
     parser.add_argument("--train_jsonl", type=str, default="train.jsonl")
     parser.add_argument("--val_jsonl", type=str, default="val.jsonl")
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--num_workers", type=int, default=1)
 
-    # Base model
     parser.add_argument("--model_id", type=str, default="sd-legacy/stable-diffusion-v1-5")
 
-    # Training
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--grad_acc_steps", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -65,66 +139,34 @@ def parse_args():
     parser.add_argument("--epochs", "--epoch", dest="epochs", type=int, default=10)
     parser.add_argument("--max_grad_norm", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--deterministic",
-        action="store_true",
-        help="More deterministic training. Slower, but reduces run-to-run variance.",
-    )
+    parser.add_argument("--deterministic", action="store_true")
 
-    # Scheduler
-    parser.add_argument(
-        "--warmup_steps",
-        type=int,
-        default=None,
-        help="If omitted, uses max(10, int(total_steps * warmup_ratio)).",
-    )
+    parser.add_argument("--warmup_steps", type=int, default=None)
     parser.add_argument("--warmup_ratio", type=float, default=0.05)
 
-    # LoRA / DoRA
     parser.add_argument("--lora_r", type=int, default=16)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
-    parser.add_argument(
-        "--target_modules",
-        type=str,
-        default=",".join(DEFAULT_TARGET_MODULES),
-        help="Comma-separated target modules for PEFT methods.",
-    )
+    parser.add_argument("--target_modules", type=str, default=",".join(DEFAULT_TARGET_MODULES))
 
-    # AdaLoRA
     parser.add_argument("--adalora_init_r", type=int, default=16)
     parser.add_argument("--adalora_target_r", type=int, default=8)
     parser.add_argument("--adalora_beta1", type=float, default=0.85)
     parser.add_argument("--adalora_beta2", type=float, default=0.85)
     parser.add_argument("--adalora_orth_reg_weight", type=float, default=0.5)
-    parser.add_argument(
-        "--adalora_tinit",
-        type=int,
-        default=None,
-        help="AdaLoRA initial warmup steps before rank allocation starts. Auto if omitted.",
-    )
-    parser.add_argument(
-        "--adalora_tfinal",
-        type=int,
-        default=None,
-        help="AdaLoRA final fine-tuning steps after rank allocation ends. Auto if omitted.",
-    )
-    parser.add_argument(
-        "--adalora_deltaT",
-        type=int,
-        default=None,
-        help="AdaLoRA allocation update interval. Auto if omitted.",
-    )
+    parser.add_argument("--adalora_tinit", type=int, default=None)
+    parser.add_argument("--adalora_tfinal", type=int, default=None)
+    parser.add_argument("--adalora_deltaT", type=int, default=None)
 
-    # Output
+    parser.add_argument("--dcft_r", type=int, default=16)
+    parser.add_argument("--dcft_kernel_size", type=int, default=4)
+    parser.add_argument("--dcft_stride", type=int, default=2)
+    parser.add_argument("--dcft_dropout", type=float, default=0.1)
+
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--plot_out", type=str, default=None)
     parser.add_argument("--metrics_out", type=str, default=None)
-    parser.add_argument(
-        "--save_final",
-        action="store_true",
-        help="Also save final checkpoint in addition to best checkpoint.",
-    )
+    parser.add_argument("--save_final", action="store_true")
 
     return parser.parse_args()
 
@@ -151,7 +193,6 @@ def get_device_and_amp() -> Tuple[str, bool, torch.dtype]:
 
 
 def compute_total_steps(num_batches: int, grad_acc_steps: int, epochs: int) -> int:
-    # Correct formula: use ceil so the last partial accumulation step is counted.
     return math.ceil(num_batches / grad_acc_steps) * epochs
 
 
@@ -159,8 +200,7 @@ def compute_warmup_steps(total_steps: int, warmup_steps: Optional[int], warmup_r
     if warmup_steps is not None:
         return min(warmup_steps, max(0, total_steps - 1))
 
-    auto_warmup = int(total_steps * warmup_ratio)
-    auto_warmup = max(10, auto_warmup)
+    auto_warmup = max(10, int(total_steps * warmup_ratio))
     return min(auto_warmup, max(0, total_steps - 1))
 
 
@@ -170,12 +210,6 @@ def compute_adalora_schedule(
     tfinal: Optional[int],
     deltaT: Optional[int],
 ) -> Tuple[int, int, int]:
-    """
-    AdaLoRA needs a valid budgeting phase:
-        tinit + tfinal < total_steps
-
-    This auto-schedule keeps it safe for short runs.
-    """
     if total_steps < 10:
         auto_tinit = 1
         auto_tfinal = 1
@@ -190,7 +224,6 @@ def compute_adalora_schedule(
     deltaT = auto_deltaT if deltaT is None else deltaT
 
     if tinit + tfinal >= total_steps:
-        # Leave at least one step for budget allocation.
         safe_side = max(1, (total_steps - 1) // 3)
         tinit = safe_side
         tfinal = safe_side
@@ -243,11 +276,30 @@ def setup_model(args, device: str, dtype: torch.dtype, total_steps: int):
 
     target_modules = parse_target_modules(args.target_modules)
 
+    peft_config = None
+
     if args.method == "full":
-        # Full UNet fine-tuning. VAE and text encoder remain frozen.
         unet.requires_grad_(True)
-        peft_config = None
         print("Method: full UNet fine-tuning")
+
+    elif args.method == "dcft":
+        unet.requires_grad_(False)
+        print(
+            f"Method: DCFT "
+            f"(r={args.dcft_r}, k={args.dcft_kernel_size}, "
+            f"s={args.dcft_stride}, dropout={args.dcft_dropout})"
+        )
+        inject_dcft(
+            unet,
+            target_modules=target_modules,
+            r=args.dcft_r,
+            kernel_size=args.dcft_kernel_size,
+            stride=args.dcft_stride,
+            dropout=args.dcft_dropout,
+        )
+        unet.to(device)
+        num_trainable = sum(p.numel() for p in unet.parameters() if p.requires_grad)
+        print(f"DCFT trainable parameters: {num_trainable:,}")
 
     else:
         unet.requires_grad_(False)
@@ -304,12 +356,30 @@ def setup_model(args, device: str, dtype: torch.dtype, total_steps: int):
     return tokenizer, text_encoder, vae, unet, noise_scheduler, peft_config
 
 
+def save_dcft_checkpoint(unet, output_dir: str):
+    os.makedirs(output_dir, exist_ok=True)
+
+    dcft_state = {
+        k: v.detach().cpu()
+        for k, v in unet.state_dict().items()
+        if "down_proj" in k or "up_proj" in k or "deconv" in k
+    }
+
+    torch.save(dcft_state, os.path.join(output_dir, "dcft_weights.pt"))
+
+    with open(os.path.join(output_dir, "dcft_config.json"), "w") as f:
+        json.dump({"format": "dcft_state_dict"}, f, indent=2)
+
+
 def save_checkpoint(unet, output_dir: str, method: str):
     os.makedirs(output_dir, exist_ok=True)
 
     if method == "adalora":
-        # AdaLoRA can crash with safetensors in some PEFT versions.
         unet.save_pretrained(output_dir, safe_serialization=False)
+
+    elif method == "dcft":
+        save_dcft_checkpoint(unet, output_dir)
+
     else:
         unet.save_pretrained(output_dir)
 
@@ -394,15 +464,11 @@ def train_one_epoch(
 
             global_step += 1
 
-            # AdaLoRA ONLY: update rank allocation after optimizer step
-            # and BEFORE zero_grad.
             if args.method == "adalora":
                 if hasattr(unet, "peft_config") and hasattr(unet, "update_and_allocate"):
                     adalora_tinit = getattr(unet.peft_config["default"], "tinit", 0)
 
                     if global_step >= adalora_tinit:
-                        # PEFT AdaLoRA may crash if some grads are None.
-                        # This makes it safe for diffusion UNet branches.
                         for p in trainable_params:
                             if p.requires_grad and p.grad is None:
                                 p.grad = torch.zeros_like(p)
@@ -426,6 +492,7 @@ def train_one_epoch(
     avg_loss = total_loss / max(1, len(train_dataloader))
     return avg_loss, global_step
 
+
 @torch.no_grad()
 def validate(unet, vae, text_encoder, noise_scheduler, val_dataloader, device: str, use_amp: bool, dtype: torch.dtype):
     unet.eval()
@@ -447,6 +514,7 @@ def validate(unet, vae, text_encoder, noise_scheduler, val_dataloader, device: s
                 (latents.shape[0],),
                 device=device,
             ).long()
+
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
             encoder_hidden_states = text_encoder(input_ids)[0]
@@ -503,7 +571,11 @@ def plot_results(epoch_train_losses, epoch_val_losses, step_losses, learning_rat
         ax4.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    os.makedirs(os.path.dirname(plot_out), exist_ok=True)
+
+    plot_dir = os.path.dirname(plot_out)
+    if plot_dir:
+        os.makedirs(plot_dir, exist_ok=True)
+
     plt.savefig(plot_out, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -531,7 +603,6 @@ def main():
     total_steps = compute_total_steps(len(train_dataloader), args.grad_acc_steps, args.epochs)
     warmup_steps = compute_warmup_steps(total_steps, args.warmup_steps, args.warmup_ratio)
 
-    # Load tokenizer again inside setup_model for clean structure.
     tokenizer, text_encoder, vae, unet, noise_scheduler, peft_config = setup_model(args, device, dtype, total_steps)
 
     trainable_params = [p for p in unet.parameters() if p.requires_grad]
@@ -662,6 +733,7 @@ def main():
                 "use_dora": args.method == "dora",
             }
         )
+
     elif args.method == "adalora":
         tinit, tfinal, deltaT = compute_adalora_schedule(
             total_steps,
@@ -684,6 +756,16 @@ def main():
             }
         )
 
+    elif args.method == "dcft":
+        hyperparameters.update(
+            {
+                "dcft_r": args.dcft_r,
+                "dcft_kernel_size": args.dcft_kernel_size,
+                "dcft_stride": args.dcft_stride,
+                "dcft_dropout": args.dcft_dropout,
+            }
+        )
+
     training_metrics = {
         "epoch_train_losses": epoch_train_losses,
         "epoch_val_losses": epoch_val_losses,
@@ -698,8 +780,10 @@ def main():
         },
         "hyperparameters": hyperparameters,
     }
-    
-    os.makedirs(os.path.dirname(metrics_out), exist_ok=True)
+
+    metrics_dir = os.path.dirname(metrics_out)
+    if metrics_dir:
+        os.makedirs(metrics_dir, exist_ok=True)
 
     with open(metrics_out, "w") as f:
         json.dump(training_metrics, f, indent=2)
