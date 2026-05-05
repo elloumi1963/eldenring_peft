@@ -178,7 +178,7 @@ def load_full_finetune(pipe, weights_path, device, dtype):
     return pipe
 
 
-def load_dcft_model(pipe, weights_path, device, args):
+def load_dcft_model(pipe, weights_path, device,dtype, args):
     if weights_path is None:
         raise ValueError("--weights_path is required for method=dcft")
 
@@ -216,7 +216,7 @@ def load_dcft_model(pipe, weights_path, device, args):
     print(f"Missing keys: {len(missing)}")
     print(f"Unexpected keys: {len(unexpected)}")
 
-    pipe.unet.to(device)
+    pipe.unet.to(device=device, dtype=dtype)
     return pipe
 
 
@@ -300,7 +300,7 @@ def main(args):
         pipe = load_peft_model(pipe, args.weights_path, args.method)
 
     elif args.method == "dcft":
-        pipe = load_dcft_model(pipe, args.weights_path, device, args)
+        pipe = load_dcft_model(pipe, args.weights_path, device, dtype, args)
 
     elif args.method == "full":
         pipe = load_full_finetune(pipe, args.weights_path, device, dtype)
