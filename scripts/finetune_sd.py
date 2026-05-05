@@ -315,119 +315,116 @@ def save_checkpoint(unet, output_dir: str, method: str):
 
 
 def train_one_epoch(
+    epoch,
+    num_epochs,
     unet,
     vae,
     text_encoder,
     noise_scheduler,
-    train_loader,
+    train_dataloader,
     optimizer,
-    lr_scheduler,
+    scheduler,
     scaler,
+    trainable_params,
+    args,
     device,
-    weight_dtype,
-    grad_acc_steps,
+    use_amp,
+    dtype,
     global_step,
-    training_method="lora",
-    epoch=None,
-    **kwargs,
+    step_losses,
+    learning_rates,
 ):
     unet.train()
     total_loss = 0.0
+    accumulated_loss = 0.0
 
-    progress_bar = tqdm(train_loader, desc=f"Training epoch", leave=False)
+    progress_bar = tqdm(
+        train_dataloader,
+        desc=f"Training epoch {epoch + 1}/{num_epochs}",
+        leave=False,
+    )
+
+    optimizer.zero_grad(set_to_none=True)
 
     for step, batch in enumerate(progress_bar):
+        is_accumulation_step = (step + 1) % args.grad_acc_steps == 0
+        is_last_step = (step + 1) == len(train_dataloader)
 
-        # -----------------------------------
-        # Encode images to latent space
-        # -----------------------------------
         with torch.no_grad():
-            latents = vae.encode(
-                batch["pixel_values"].to(device, dtype=weight_dtype)
-            ).latent_dist.sample()
-            latents = latents * 0.18215
+            pixel_values = batch["pixel_values"].to(device, dtype=dtype)
+            input_ids = batch["input_ids"].to(device)
 
-            encoder_hidden_states = text_encoder(
-                batch["input_ids"].to(device)
-            )[0]
+            latents = vae.encode(pixel_values).latent_dist.sample()
+            latents = latents * vae.config.scaling_factor
 
-        # -----------------------------------
-        # Sample noise and timesteps
-        # -----------------------------------
+            encoder_hidden_states = text_encoder(input_ids)[0]
+
         noise = torch.randn_like(latents)
         timesteps = torch.randint(
             0,
             noise_scheduler.config.num_train_timesteps,
             (latents.shape[0],),
-            device=device
+            device=device,
         ).long()
 
         noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-        # -----------------------------------
-        # Forward + loss
-        # -----------------------------------
-        with autocast(enabled=(device == "cuda")):
+        with autocast(device_type=device, enabled=use_amp):
             noise_pred = unet(
                 noisy_latents,
                 timesteps,
-                encoder_hidden_states
+                encoder_hidden_states,
             ).sample
 
             loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
-            loss = loss / grad_acc_steps
+            loss = loss / args.grad_acc_steps
 
-        # -----------------------------------
-        # Backward
-        # -----------------------------------
         scaler.scale(loss).backward()
 
-        # -----------------------------------
-        # Optimizer step
-        # -----------------------------------
-        if (step + 1) % grad_acc_steps == 0:
+        total_loss += loss.item() * args.grad_acc_steps
+        accumulated_loss += loss.item() * args.grad_acc_steps
 
+        if is_accumulation_step or is_last_step:
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(trainable_params, args.max_grad_norm)
 
             scaler.step(optimizer)
             scaler.update()
-
-            optimizer.zero_grad(set_to_none=True)
-            lr_scheduler.step()
+            scheduler.step()
 
             global_step += 1
 
-            # -----------------------------------
-            # AdaLoRA rank reallocation ONLY
-            # -----------------------------------
-            if training_method == "adalora":
+            # AdaLoRA ONLY: update rank allocation after optimizer step
+            # and BEFORE zero_grad.
+            if args.method == "adalora":
                 if hasattr(unet, "peft_config") and hasattr(unet, "update_and_allocate"):
                     adalora_tinit = getattr(unet.peft_config["default"], "tinit", 0)
 
                     if global_step >= adalora_tinit:
-
-                        # protect against None gradients
-                        for p in unet.parameters():
+                        # PEFT AdaLoRA may crash if some grads are None.
+                        # This makes it safe for diffusion UNet branches.
+                        for p in trainable_params:
                             if p.requires_grad and p.grad is None:
                                 p.grad = torch.zeros_like(p)
 
                         unet.update_and_allocate(global_step)
 
-        total_loss += loss.item() * grad_acc_steps
+            optimizer.zero_grad(set_to_none=True)
 
-        current_lr = optimizer.param_groups[0]["lr"]
+            step_losses.append(accumulated_loss)
+            learning_rates.append(scheduler.get_last_lr()[0])
+            accumulated_loss = 0.0
 
-        progress_bar.set_postfix({
-            "loss": f"{loss.item() * grad_acc_steps:.4f}",
-            "lr": f"{current_lr:.2e}",
-            "step": global_step
-        })
+        progress_bar.set_postfix(
+            {
+                "loss": f"{loss.item() * args.grad_acc_steps:.4f}",
+                "lr": f"{scheduler.get_last_lr()[0]:.2e}",
+                "step": global_step,
+            }
+        )
 
-    avg_loss = total_loss / len(train_loader)
-
+    avg_loss = total_loss / max(1, len(train_dataloader))
     return avg_loss, global_step
-
 
 @torch.no_grad()
 def validate(unet, vae, text_encoder, noise_scheduler, val_dataloader, device: str, use_amp: bool, dtype: torch.dtype):
