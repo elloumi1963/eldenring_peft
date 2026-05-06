@@ -93,7 +93,6 @@ outputs/**
 checkpoints/
 models/
 # Keep metric summaries
-!outputs/*/metrics/results.json
 !outputs/*/eval/results.json
 
 
