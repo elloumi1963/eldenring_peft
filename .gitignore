@@ -92,17 +92,7 @@ outputs/**
 checkpoints/
 models/
 
-# =========================
 
-# Generated evaluation images/results
-
-# =========================
-
-eval_*_samples/
-samples/
-*.png
-*.jpg
-*.jpeg
 
 # keep json metric summaries if you want:
 
