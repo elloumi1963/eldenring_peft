@@ -25,7 +25,7 @@ def collect_images(src_dir, dest_dir):
 
 def caption_images(image_dir, output_file):
     """Reads a folder of PNGs, sends them to OpenAI, and saves to a JSONL file with resume capability."""
-    client = OpenAI(api_key="<YOUR_OPENAI_API_KEY>")
+    client = OpenAI()
     image_path = Path(image_dir)
     png_files = list(image_path.glob("*.png"))
     png_files.sort()
