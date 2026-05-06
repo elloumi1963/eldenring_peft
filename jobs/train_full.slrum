@@ -1,0 +1,24 @@
+#!/bin/bash
+#SBATCH --job-name=full
+#SBATCH --output=logs/full_%j.out
+#SBATCH --error=logs/full_%j.err
+#SBATCH --partition=coc-gpu
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --time=02:00:00
+
+cd ~/scratch/eldenring_peft || exit 1
+mkdir -p logs outputs/full/weights outputs/full/plots outputs/full/metrics
+
+PYTHONPATH=src ~/.conda/envs/eval_env/bin/python scripts/finetune_sd.py \
+  --method full \
+  --lr 1e-5 \
+  --batch_size 1 \
+  --grad_acc_steps 4 \
+  --epochs 10 \
+  --weight_decay 0.01 \
+  --eps 1e-08 \
+  --output_dir outputs/full/weights \
+  --plot_out outputs/full/plots/train.png \
+  --metrics_out outputs/full/metrics/results.json

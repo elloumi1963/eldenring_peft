@@ -2,9 +2,10 @@
 #SBATCH --job-name=lora
 #SBATCH --output=logs/lora_%j.out
 #SBATCH --error=logs/lora_%j.err
-#SBATCH --gres=gpu:h100:1
+#SBATCH --gres=gpu:1
+#SBATCH --partition=coc-gpu
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
+#SBATCH --mem=16G
 #SBATCH --time=00:30:00
 
 cd ~/scratch/eldenring_peft || exit 1

@@ -2,9 +2,10 @@
 #SBATCH --job-name=dora
 #SBATCH --output=logs/dora_%j.out
 #SBATCH --error=logs/dora_%j.err
+#SBATCH --partition=coc-gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
+#SBATCH --mem=16G
 #SBATCH --time=00:30:00
 
 cd ~/scratch/eldenring_peft || exit 1

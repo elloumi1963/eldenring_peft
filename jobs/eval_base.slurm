@@ -2,7 +2,8 @@
 #SBATCH --job-name=eval_base
 #SBATCH --output=logs/eval_base_%j.out
 #SBATCH --error=logs/eval_base_%j.err
-#SBATCH --gres=gpu:h100:1
+#SBATCH --gres=gpu:1
+#SBATCH --partition=coc-gpu
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 #SBATCH --time=00:10:00

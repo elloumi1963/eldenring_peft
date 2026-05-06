@@ -3,8 +3,9 @@
 #SBATCH --output=logs/adalora_%j.out
 #SBATCH --error=logs/adalora_%j.err
 #SBATCH --gres=gpu:1
+#SBATCH --partition=coc-gpu
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
+#SBATCH --mem=16G
 #SBATCH --time=02:00:00
 
 cd ~/scratch/eldenring_peft || exit 1
