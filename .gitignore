@@ -82,6 +82,7 @@ outputs/**
 # Re-open folders so git can traverse them
 !outputs/
 !outputs/*/
+!outputs/*/metrics/
 !outputs/*/eval/
 !outputs/*/eval/samples/
 
@@ -91,6 +92,9 @@ outputs/**
 !outputs/*/eval/samples/eldenring_custom_03.png
 checkpoints/
 models/
+# Keep metric summaries
+!outputs/*/metrics/results.json
+!outputs/*/eval/results.json
 
 
 
