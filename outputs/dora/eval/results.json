@@ -1,0 +1,16 @@
+{
+    "method": "dora",
+    "model_id": "sd-legacy/stable-diffusion-v1-5",
+    "weights_path": "outputs/dora/weights",
+    "Base Parameters": 859520964,
+    "Adapter Parameters": 6196416,
+    "Total Parameters": 865717380,
+    "Adapter %": 0.7158,
+    "FID (Lower is better)": 221.2383,
+    "KID Mean (Lower is better)": 0.0214,
+    "KID Std": 0.003,
+    "CLIPScore (Higher is better)": 37.8851,
+    "num_inference_steps": 30,
+    "guidance_scale": 7.5,
+    "seed": 42
+}

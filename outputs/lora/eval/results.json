@@ -1,0 +1,16 @@
+{
+    "method": "lora",
+    "model_id": "sd-legacy/stable-diffusion-v1-5",
+    "weights_path": "outputs/lora/weights",
+    "Base Parameters": 859520964,
+    "Adapter Parameters": 5984256,
+    "Total Parameters": 865505220,
+    "Adapter %": 0.6914,
+    "FID (Lower is better)": 221.6278,
+    "KID Mean (Lower is better)": 0.0223,
+    "KID Std": 0.0027,
+    "CLIPScore (Higher is better)": 37.8797,
+    "num_inference_steps": 30,
+    "guidance_scale": 7.5,
+    "seed": 42
+}

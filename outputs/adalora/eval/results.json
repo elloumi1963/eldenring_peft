@@ -1,0 +1,16 @@
+{
+    "method": "adalora",
+    "model_id": "sd-legacy/stable-diffusion-v1-5",
+    "weights_path": "outputs/adalora/weights",
+    "Base Parameters": 859523111,
+    "Adapter Parameters": 5164192,
+    "Total Parameters": 864687303,
+    "Adapter %": 0.5972,
+    "FID (Lower is better)": 247.6959,
+    "KID Mean (Lower is better)": 0.0415,
+    "KID Std": 0.005,
+    "CLIPScore (Higher is better)": 36.2857,
+    "num_inference_steps": 30,
+    "guidance_scale": 7.5,
+    "seed": 42
+}

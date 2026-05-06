@@ -1,0 +1,16 @@
+{
+    "method": "dcft",
+    "model_id": "sd-legacy/stable-diffusion-v1-5",
+    "weights_path": "outputs/dcft/weights",
+    "Base Parameters": 859520964,
+    "Adapter Parameters": 6129888,
+    "Total Parameters": 865650852,
+    "Adapter %": 0.7081,
+    "FID (Lower is better)": 235.7544,
+    "KID Mean (Lower is better)": 0.0285,
+    "KID Std": 0.0041,
+    "CLIPScore (Higher is better)": 37.7197,
+    "num_inference_steps": 30,
+    "guidance_scale": 7.5,
+    "seed": 42
+}

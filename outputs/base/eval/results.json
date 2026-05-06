@@ -1,0 +1,16 @@
+{
+    "method": "base",
+    "model_id": "sd-legacy/stable-diffusion-v1-5",
+    "weights_path": null,
+    "Base Parameters": 859520964,
+    "Adapter Parameters": 0,
+    "Total Parameters": 859520964,
+    "Adapter %": 0.0,
+    "FID (Lower is better)": 249.13,
+    "KID Mean (Lower is better)": 0.0417,
+    "KID Std": 0.0044,
+    "CLIPScore (Higher is better)": 36.2454,
+    "num_inference_steps": 30,
+    "guidance_scale": 7.5,
+    "seed": 42
+}
