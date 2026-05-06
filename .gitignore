@@ -76,7 +76,19 @@ huggingface/
 elden_ring_lora_weights/
 elden_ring_dora_weights/
 elden_ring_adalora_weights/
-outputs/
+# Ignore everything in outputs
+outputs/**
+
+# Re-open folders so git can traverse them
+!outputs/
+!outputs/*/
+!outputs/*/eval/
+!outputs/*/eval/samples/
+
+# Keep only custom showcase images
+!outputs/*/eval/samples/eldenring_custom_01.png
+!outputs/*/eval/samples/eldenring_custom_02.png
+!outputs/*/eval/samples/eldenring_custom_03.png
 checkpoints/
 models/
 
